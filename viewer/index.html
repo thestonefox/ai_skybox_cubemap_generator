@@ -1,0 +1,334 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+
+  <title>Cubemap Skybox Viewer</title>
+
+  <style>
+    html,
+    body {
+      margin: 0;
+      width: 100%;
+      height: 100%;
+      overflow: hidden;
+      background: #000;
+      font-family: Arial, sans-serif;
+    }
+
+    canvas {
+      display: block;
+    }
+
+    #toolbar {
+      position: fixed;
+      top: 12px;
+      left: 12px;
+      z-index: 1000;
+
+      display: flex;
+      align-items: center;
+      gap: 8px;
+
+      padding: 10px 12px;
+
+      background: rgba(0, 0, 0, 0.65);
+      color: white;
+
+      border-radius: 6px;
+      backdrop-filter: blur(5px);
+    }
+
+    #textureSelect {
+      font-size: 15px;
+      padding: 5px 8px;
+    }
+
+    #status {
+      position: fixed;
+      bottom: 12px;
+      left: 12px;
+      z-index: 1000;
+      padding: 7px 10px;
+      background: rgba(0, 0, 0, 0.6);
+      color: white;
+      border-radius: 5px;
+      font-size: 13px;
+    }
+  </style>
+</head>
+
+<body>
+
+  <div id="toolbar">
+    <label for="textureSelect">Skybox:</label>
+    <select id="textureSelect"></select>
+  </div>
+
+  <div id="status">Loading...</div>
+
+  <script type="importmap">
+  {
+    "imports": {
+      "three": "https://cdn.jsdelivr.net/npm/three@0.180.0/build/three.module.js",
+      "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.180.0/examples/jsm/"
+    }
+  }
+  </script>
+
+
+  <script type="module">
+
+    import * as THREE from "three";
+    import { OrbitControls } from "three/addons/controls/OrbitControls.js";
+
+    const textureSelect = document.getElementById("textureSelect");
+    const status = document.getElementById("status");
+    const scene = new THREE.Scene();
+
+    const camera = new THREE.PerspectiveCamera(
+      75,
+      window.innerWidth / window.innerHeight,
+      0.1,
+      1000
+    );
+
+    camera.position.set(0, 0, 0.01);
+
+    const renderer = new THREE.WebGLRenderer({
+      antialias: true
+    });
+
+    renderer.setSize(
+      window.innerWidth,
+      window.innerHeight
+    );
+
+    renderer.setPixelRatio(
+      Math.min(window.devicePixelRatio, 2)
+    );
+
+    document.body.appendChild(
+      renderer.domElement
+    );
+
+    const controls = new OrbitControls(
+      camera,
+      renderer.domElement
+    );
+
+    controls.enablePan = false;
+    controls.enableZoom = false;
+    controls.rotateSpeed = -0.35;
+    controls.target.set(0, 0, 0);
+
+    function extractFace(
+      image,
+      gridX,
+      gridY,
+      faceSize
+    ) {
+
+      const canvas = document.createElement("canvas");
+
+      canvas.width = faceSize;
+      canvas.height = faceSize;
+
+      const ctx = canvas.getContext("2d");
+
+      ctx.drawImage(
+        image,
+
+        gridX * faceSize,
+        gridY * faceSize,
+        faceSize,
+        faceSize,
+
+        0,
+        0,
+        faceSize,
+        faceSize
+      );
+
+      return canvas;
+    }
+
+    function loadCubemap(filename) {
+      status.textContent = "Loading " + filename + "...";
+      const image = new Image();
+
+      image.onload = () => {
+        const faceSize = image.width / 4;
+
+        if (
+          image.width % 4 !== 0 ||
+          image.height % 3 !== 0 ||
+          image.height !== faceSize * 3
+        ) {
+
+          status.textContent = "Invalid cubemap dimensions: " + filename;
+
+          console.error(
+            "Cubemap must be a 4x3 cross layout.",
+            filename,
+            image.width,
+            image.height
+          );
+
+          return;
+        }
+
+        const posX = extractFace(image, 2, 1, faceSize);
+        const negX = extractFace(image, 0, 1, faceSize);
+        const posY = extractFace(image, 1, 0, faceSize);
+        const negY = extractFace(image, 1, 2, faceSize);
+        const posZ = extractFace(image, 1, 1, faceSize);
+        const negZ = extractFace(image, 3, 1, faceSize);
+
+        const cubeTexture =
+          new THREE.CubeTexture([
+            posX,
+            negX,
+            posY,
+            negY,
+            posZ,
+            negZ
+          ]);
+
+        cubeTexture.colorSpace = THREE.SRGBColorSpace;
+        cubeTexture.needsUpdate = true;
+
+        if (
+          scene.background &&
+          scene.background.isCubeTexture
+        ) {
+          scene.background.dispose();
+        }
+
+        scene.background = cubeTexture;
+        status.textContent = filename;
+      };
+
+      image.onerror = () => {
+        status.textContent =
+          "Failed to load " + filename;
+        console.error(
+          "Could not load:",
+          "textures/" + filename
+        );
+      };
+
+      image.src = "textures/" + encodeURIComponent(filename);
+    }
+
+    async function loadTextureList() {
+      try {
+        const response =
+          await fetch(
+            "textures/textures.json",
+            {
+              cache: "no-store"
+            }
+          );
+
+        if (!response.ok) {
+          throw new Error(
+            "HTTP " + response.status
+          );
+        }
+
+        const textures = await response.json();
+
+        if (!Array.isArray(textures)) {
+          throw new Error(
+            "textures.json must contain a JSON array"
+          );
+        }
+
+        textureSelect.innerHTML = "";
+
+        for (const filename of textures) {
+          const option =
+            document.createElement("option");
+          option.value =
+            filename;
+          option.textContent =
+            filename.replace(
+              /\.[^/.]+$/,
+              ""
+            );
+
+          textureSelect.appendChild(
+            option
+          );
+        }
+
+
+        if (textures.length === 0) {
+          status.textContent =
+            "No textures found";
+          return;
+        }
+
+        loadCubemap(
+          textures[0]
+        );
+
+      }
+      catch (error) {
+        console.error(error);
+        status.textContent =
+          "Could not load textures/textures.json";
+      }
+    }
+
+    textureSelect.addEventListener(
+      "change",
+      () => {
+
+        loadCubemap(
+          textureSelect.value
+        );
+
+      }
+    );
+
+    window.addEventListener(
+      "resize",
+      () => {
+
+        camera.aspect =
+          window.innerWidth /
+          window.innerHeight;
+
+        camera.updateProjectionMatrix();
+
+        renderer.setSize(
+          window.innerWidth,
+          window.innerHeight
+        );
+
+      }
+    );
+
+    function animate() {
+      requestAnimationFrame(
+        animate
+      );
+
+      controls.update();
+
+      renderer.render(
+        scene,
+        camera
+      );
+    }
+
+    animate();
+    loadTextureList();
+
+  </script>
+
+</body>
+</html>
